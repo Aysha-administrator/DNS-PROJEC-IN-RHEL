@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# DNSSEC Setup Script for BIND
+ZONE="abc.com"  # Your domain name
+DNSKEY="dnssec.keys"  # DNSSEC keys file
+
+# Check if the zone file exists
+if [ ! -f "/var/named/$ZONE.zone" ]; then
+    echo "Zone file for $ZONE does not exist. Exiting."
+    exit 1
+fi
+
+# Navigate to the BIND working directory
+cd /var/named
+
+# Generate DNSSEC keys
+echo "Generating DNSSEC keys for $ZONE..."
+dnssec-keygen -a RSASHA256 -b 2048 -n ZONE $ZONE
+
+# Sign the zone with the new keys
+echo "Signing the zone $ZONE..."
+dnssec-signzone -o $ZONE -N INCREMENT -f $ZONE.signed $ZONE.zone
+
+# Update the named.conf to include the DNSKEY records
+echo "Updating named.conf..."
+cat >> /etc/named.conf <<EOL
+zone "$ZONE" IN {
+    type master;
+    file "$ZONE.signed";
+    auto-dnssec maintain;
+    key-directory "/var/named/dnssec";  # Adjust as needed
+};
+EOL
+
+# Restart the named service
+systemctl restart named
+echo "DNSSEC configuration for $ZONE completed."

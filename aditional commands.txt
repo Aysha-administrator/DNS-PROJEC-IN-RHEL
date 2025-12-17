@@ -1,0 +1,26 @@
+#for section 2 installation of DNS software 
+will run script for yum configuration,install bind package,
+I[root@server1 ~]# vim YumIPConf
+[root@server1 ~]# vim YumIPConf
+[root@server1 ~]# ls -l  YumIPConf
+-rw-r--r--. 1 root root 1338 Sep 25 03:39 YumIPConf
+[root@server1 ~]# chmod 755 YumIPConf
+[root@server1 ~]# ls -l  YumIPConf
+-rwxr-xr-x. 1 root root 1338 Sep 25 03:39 YumIPConf
+[root@server1 ~]# ./YumIPConf
+[root@server1 ~]# yum install zsh
+Complete!
+[root@server1 ~]# rpm -qa | grep zsh
+zsh-5.5.1-9.el8.x86_64 
+
+
+
+1.Make the scripts executable:
+
+chmod +x DnsSecSetup.sh NagiosSetup.sh
+
+
+2.Run the scripts:
+
+./DnsSecSetup.sh
+./NagiosSetup.sh

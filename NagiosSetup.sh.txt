@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Nagios Setup Script
+NAGIOS_USER="nagios"
+NAGIOS_GROUP="nagcmd"
+NAGIOS_DIR="/usr/local/nagios"
+
+# Check if Nagios is installed
+if [ ! -d "$NAGIOS_DIR" ]; then
+    echo "Nagios installation directory not found. Exiting."
+    exit 1
+fi
+
+# Install Nagios plugins if not already installed
+if ! command -v nagios > /dev/null; then
+    echo "Nagios plugins not found. Installing..."
+    cd /tmp/nagios-plugins-2.1.1
+    ./configure --with-nagios-user=$NAGIOS_USER --with-nagios-group=$NAGIOS_GROUP --with-openssl
+    make all
+    make install
+fi
+
+# Enable and start Nagios service
+echo "Enabling and starting Nagios service..."
+systemctl enable nagios
+systemctl start nagios
+
+# Open the firewall for HTTP
+echo "Configuring firewall..."
+firewall-cmd --permanent --add-service=http
+firewall-cmd --reload
+
+# Check the status of Nagios service
+systemctl status nagios
+
+echo "Nagios setup completed."

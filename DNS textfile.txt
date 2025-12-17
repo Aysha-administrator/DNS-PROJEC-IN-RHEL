@@ -1,0 +1,804 @@
+Background: You are a system administrator responsible for managing the IT infrastructure of a medium-sized company. The company is expanding its online 
+presence and needs a reliable DNS server to manage internal and external domain name resolution. You've decided to implement this on Red Hat Enterprise 
+Linux due to its stability, security features, and robust support.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+ Steps Involved:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+01. Server Setup:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+Provision a new server with Red Hat Enterprise Linux installed. Ensure the server has adequate resources (CPU, RAM, disk space) to handle DNS 
+queries based on expected usage.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# nmcli connection modify profile1 ipv4.dns 192.168.8.10
+[root@server1 ~]# nmcli connection up profile1 
+
+[root@server1 ~]# nmcli device show ens160 | grep IP4
+IP4.ADDRESS[1]:                         8.8.8.8/32
+IP4.ADDRESS[2]:                         192.168.8.10/24
+IP4.GATEWAY:                            192.168.8.2
+IP4.ROUTE[1]:                           dst = 192.168.8.0/24, nh = 0.0.0.0, mt = 100
+IP4.ROUTE[2]:                           dst = 0.0.0.0/0, nh = 192.168.8.2, mt = 100
+IP4.DNS[1]:                             192.168.8.10
+IP4.SEARCHES[1]:                        abc.com
+
+[root@server1 ~]# cat /etc/hosts
+127.0.0.1   localhost localhost.localdomain localhost4 localhost4.localdomain4
+::1         localhost localhost.localdomain localhost6 localhost6.localdomain6
+
+[root@server1 ~]# vim /etc/yum.repos.d/linux.repo 
+[AppStream]
+name=Server1 ftp AppStream
+baseurl=ftp://192.168.8.10/dvd/AppStream/
+enabled=1
+gpgcheck=0
+
+[BaseOS]
+name=Server1 ftp BaseOS
+baseurl=ftp://192.168.8.10/dvd/BaseOS/
+enabled=1
+gpgcheck=0
+
+[root@server1 ~]# yum clean all 
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+02. Installation of DNS Software:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    Choose BIND (Berkeley Internet Name Domain), the most widely used DNS software on Linux systems.
+    Install BIND on the RHEL server using package management tools (yum or dnf).
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# yum install bind -y
+
+[root@server1 ~]# systemctl enable named --now
+
+[root@server1 ~]# firewall-cmd --permanent --add-service=dns 
+[root@server1 ~]# firewall-cmd --reload 
+
+[root@server1 ~]# firewall-cmd --list-services 
+cockpit dhcpv6-client dns ftp ssh
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+03. Configuring BIND:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Edit the BIND configuration files (named.conf, named.conf.options, named.conf.local, etc.) located typically in /etc/named/ to define the server's behavior,
+zones, and DNS resolution options.Set up forwarders if the server will resolve external DNS queries by forwarding them to another DNS server, such as your 
+ISP's DNS servers or public DNS servers like Google DNS.
+
+----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# vim /etc/named.conf 
+//
+// named.conf
+//
+// Provided by Red Hat bind package to configure the ISC BIND named(8) DNS
+// server as a caching only nameserver (as a localhost DNS resolver only).
+//
+// See /usr/share/doc/bind*/sample/ for example named configuration files.
+//
+
+
+logging {
+        channel default_debug {
+                file "data/named.run";
+                severity dynamic;
+        };
+};
+
+zone "." IN {
+	type hint;
+	file "named.ca";
+};
+
+include "/etc/named.rfc1912.zones";
+include "/etc/named.root.key";
+include "/etc/named/named.conf.options";
+
+[root@server1 ~]# vim /etc/named/named.conf.options
+options {
+        listen-on port 53 { any; };
+        listen-on-v6 port 53 { any; };
+        directory       "/var/named";
+        dump-file       "/var/named/data/cache_dump.db";
+        statistics-file "/var/named/data/named_stats.txt";
+        memstatistics-file "/var/named/data/named_mem_stats.txt";
+        secroots-file   "/var/named/data/named.secroots";
+        recursing-file  "/var/named/data/named.recursing";
+        allow-query     { any; };
+
+        /* 
+         - If you are building an AUTHORITATIVE DNS server, do NOT enable recursion.
+         - If you are building a RECURSIVE (caching) DNS server, you need to enable 
+           recursion. 
+         - If your recursive DNS server has a public IP address, you MUST enable access 
+           control to limit queries to your legitimate users. Failing to do so will
+           cause your server to become part of large scale DNS amplification 
+           attacks. Implementing BCP38 within your network would greatly
+           reduce such attack surface 
+        */
+        recursion yes;
+	forwarders { 8.8.8.8; };
+
+        dnssec-enable yes;
+        dnssec-validation yes;
+
+        managed-keys-directory "/var/named/dynamic";
+
+        pid-file "/run/named/named.pid";
+        session-keyfile "/run/named/session.key";
+
+        /* https://fedoraproject.org/wiki/Changes/CryptoPolicy */
+        include "/etc/crypto-policies/back-ends/bind.config";
+};
+
+[root@server1 ~]# systemctl restart named
+
+[root@server1 ~]# nslookup facebook.com
+Server:		192.168.8.10
+Address:	192.168.8.10#53
+
+Non-authoritative answer:
+Name:	facebook.com
+Address: 157.240.1.35
+Name:	facebook.com
+Address: 2a03:2880:f16b:81:face:b00c:0:25de
+
+
+[root@server1 ~]# vim /etc/named.conf
+include "/etc/named.rfc1912.zones";
+include "/etc/named.root.key";
+include "/etc/named/named.conf.options";
+include "/etc/named/named.conf.local";
+
+[root@server1 ~]# vim /etc/named/named.conf.local
+zone "abc.com" IN {
+	type	master;
+	file	"/var/named/abc.com";
+	allow-transfer	{ none; };
+};
+
+zone "8.168.192.in-addr.arpa" IN {
+	type	master;
+	file	"/var/named/abc.com.rz";
+	allow-transfer	{ none; };
+};
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+04. Creating DNS Zones:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+    Define and configure DNS zones:
+        Forward Lookup Zones:Create zones to map domain names to IP addresses (A records), mail exchange (MX records), aliases (CNAME records), etc.
+        Reverse Lookup Zones:Set up zones to map IP addresses to domain names (PTR records), which are particularly useful for reverse DNS lookups.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# cp -p /var/named/named.localhost /var/named/abc.com
+
+[root@server1 ~]# vim /var/named/abc.com
+$TTL 1D
+$ORIGIN abc.com.
+@ IN SOA server1.abc.com. root.abc.com. (
+					2024092801 	; serial
+					12H 		; refresh
+					30M 		; retry
+					3D 		; expire
+					3H ) 		; minimum
+		
+		NS 		server1.abc.com.
+		NS 		server2.abc.com.
+		MX	10	server1.abc.com.
+		MX	20	server2.abc.com.
+
+server1		A		192.168.8.10
+server1		AAAA		2000:10::1
+server2		A		192.168.8.20
+server3		A		192.168.8.30
+windows10	A		192.168.8.1
+gateway		A		192.168.8.2
+
+redhat1		CNAME		server1.abc.com.
+redhat2		CNAME		server2.abc.com.
+redhat3		CNAME		server3.abc.com.
+
+linux1		CNAME		server1.abc.com.
+linux2		CNAME		server2.abc.com.
+linux3		CNAME		server3.abc.com.
+
+
+[root@server1 ~]# cp -p /var/named/abc.com /var/named/abc.com.rz
+
+[root@server1 ~]# vim /var/named/abc.com.rz
+$TTL 1D
+$ORIGIN 8.168.192.in-addr.arpa.
+@ IN SOA server1.abc.com. root.abc.com. (
+					2024092801 	; serial
+					12H 		; refresh
+					30M 		; retry
+					3D 		; expire
+					3H ) 		; minimum
+		
+		NS 		server1.abc.com.
+		NS 		server2.abc.com.
+		MX	10	server1.abc.com.
+		MX	20	server2.abc.com.
+
+10		PTR		server1.abc.com.
+20		PTR		server2.abc.com.
+1		PTR		windows10.abc.com.
+2		PTR		gateway.abc.com.
+
+[root@server1 ~]# systemctl restart named
+
+[root@server2 ~]# nmcli connection modify profile1 ipv4.dns 192.168.8.10
+[root@server2 ~]# nmcli connection up profile1 
+
+[root@server2 ~]# nmcli device show ens160 | grep IP4
+IP4.ADDRESS[1]:                         192.168.8.20/24
+IP4.GATEWAY:                            192.168.8.2
+IP4.ROUTE[1]:                           dst = 192.168.8.0/24, nh = 0.0.0.0, mt = 100
+IP4.ROUTE[2]:                           dst = 0.0.0.0/0, nh = 192.168.8.2, mt = 100
+IP4.DNS[1]:                             192.168.8.10
+IP4.SEARCHES[1]:                        abc.com
+
+[root@server2 ~]# nslookup server1.abc.com
+Server:		192.168.8.10
+Address:	192.168.8.10#53
+
+Name:	server1.abc.com
+Address: 192.168.8.10
+Name:	server1.abc.com
+Address: 2000:10::1
+
+[root@server2 ~]# nslookup 192.168.8.10
+10.8.168.192.in-addr.arpa	name = server1.abc.com.
+
+[root@server2 ~]# nslookup facebook.com
+Server:		192.168.8.10
+Address:	192.168.8.10#53
+
+Non-authoritative answer:
+Name:	facebook.com
+Address: 157.240.1.35
+Name:	facebook.com
+Address: 2a03:2880:f16b:81:face:b00c:0:25de
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+05. Securing the DNS Server:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Implement security measures such as restricting zone transfers, configuring access controls (allow-query, allow-transferdirectives), 
+and enabling DNSSEC (DNS Security Extensions) to provide data integrity and authentication.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# vim /etc/named/named.conf.local 
+zone "abc.com" IN {
+	type	master;
+	file	"/var/named/abc.com";
+	allow-query { 127.0.0.1; 192.168.8.0/24; };
+	allow-transfer	{ none; };
+};
+
+zone "8.168.192.in-addr.arpa" IN {
+	type	master;
+	file	"/var/named/abc.com.rz";
+	allow-query { 127.0.0.1; 192.168.8.0/24; };
+	allow-transfer	{ none; };
+};
+ 
+[root@server1 ~]# systemctl restart named
+
+
+[root@server1 ~]# cd /var/named/ 
+[root@server1 named]# dnssec-keygen -a RSASHA256 -b 2048 -n ZONE abc.com
+Generating key pair....................+++++ .................+++++ 
+Kabc.com.+008+14635
+
+[root@server1 named]# cat Kabc.com.+008+14635.key >> abc.com
+
+[root@server1 named]# dnssec-keygen -a RSASHA256 -b 1024 -n ZONE -f KSK abc.com
+Generating key pair.....................+++++ ...................+++++ 
+Kabc.com.+008+11761
+
+[root@server1 named]# cat Kabc.com.+008+11761.key >> /var/named/abc.com
+
+[root@server1 named]# dnssec-signzone -o abc.com -k Kabc.com.+008+11761. abc.com
+Verifying the zone using the following algorithms: RSASHA256.
+Zone fully signed:
+Algorithm: RSASHA256: KSKs: 1 active, 0 stand-by, 0 revoked
+                      ZSKs: 1 active, 0 stand-by, 0 revoked
+abc.com.signed
+
+[root@server1 named]# cat abc.com.signed 
+
+[root@server1 named]# systemctl restart named
+
+[root@server1 named]# dig +dnssec abc.com
+
+; <<>> DiG 9.11.36-RedHat-9.11.36-3.el8 <<>> +dnssec abc.com
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 53201
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags: do; udp: 1232
+; COOKIE: d476ab914572ce26ca6fbd2366f78e6d062db6a0792ff6ca (good)
+;; QUESTION SECTION:
+;abc.com.			IN	A
+
+;; AUTHORITY SECTION:
+abc.com.		10800	IN	SOA	server1.abc.com. root.abc.com. 2024092801 43200 1800 259200 10800
+
+;; Query time: 0 msec
+;; SERVER: 192.168.8.10#53(192.168.8.10)
+;; WHEN: Sat Sep 28 11:04:45 +06 2024
+;; MSG SIZE  rcvd: 113
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+06. Testing and Validation:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    Test the DNS server configuration using tools like dig(domain information groper) to ensure proper resolution of domain names both internally and externally.
+    Verify that DNS records are correctly configured and propagated.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server2 ~]# dig server1.abc.com
+
+; <<>> DiG 9.11.36-RedHat-9.11.36-3.el8 <<>> server1.abc.com
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 61855
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 2, ADDITIONAL: 3
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: 59fff986c3eab1bc45382bf266f79070d28ce808c4bf137d (good)
+;; QUESTION SECTION:
+;server1.abc.com.		IN	A
+
+;; ANSWER SECTION:
+server1.abc.com.	86400	IN	A	192.168.8.10
+
+;; AUTHORITY SECTION:
+abc.com.		86400	IN	NS	server2.abc.com.
+abc.com.		86400	IN	NS	server1.abc.com.
+
+;; ADDITIONAL SECTION:
+server2.abc.com.	86400	IN	A	192.168.8.20
+server1.abc.com.	86400	IN	AAAA	2000:10::1
+
+;; Query time: 0 msec
+;; SERVER: 192.168.8.10#53(192.168.8.10)
+;; WHEN: Sat Sep 28 11:13:20 +06 2024
+;; MSG SIZE  rcvd: 168
+
+
+[root@server2 ~]# dig server2.abc.com
+
+; <<>> DiG 9.11.36-RedHat-9.11.36-3.el8 <<>> server2.abc.com
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 22310
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 2, ADDITIONAL: 3
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: 202093b0fd8cb159663a2b4566f790735b9f342daf015d22 (good)
+;; QUESTION SECTION:
+;server2.abc.com.		IN	A
+
+;; ANSWER SECTION:
+server2.abc.com.	86400	IN	A	192.168.8.20
+
+;; AUTHORITY SECTION:
+abc.com.		86400	IN	NS	server2.abc.com.
+abc.com.		86400	IN	NS	server1.abc.com.
+
+;; ADDITIONAL SECTION:
+server1.abc.com.	86400	IN	A	192.168.8.10
+server1.abc.com.	86400	IN	AAAA	2000:10::1
+
+;; Query time: 0 msec
+;; SERVER: 192.168.8.10#53(192.168.8.10)
+;; WHEN: Sat Sep 28 11:13:23 +06 2024
+;; MSG SIZE  rcvd: 168
+
+[root@server2 ~]# dig redhat1.abc.com
+
+; <<>> DiG 9.11.36-RedHat-9.11.36-3.el8 <<>> redhat1.abc.com
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 34689
+;; flags: qr aa rd ra; QUERY: 1, ANSWER: 2, AUTHORITY: 2, ADDITIONAL: 3
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 1232
+; COOKIE: 3ed3cb484d1fba0340b037fa66f79077afa29c7eadf8bce6 (good)
+;; QUESTION SECTION:
+;redhat1.abc.com.		IN	A
+
+;; ANSWER SECTION:
+redhat1.abc.com.	86400	IN	CNAME	server1.abc.com.
+server1.abc.com.	86400	IN	A	192.168.8.10
+
+;; AUTHORITY SECTION:
+abc.com.		86400	IN	NS	server1.abc.com.
+abc.com.		86400	IN	NS	server2.abc.com.
+
+;; ADDITIONAL SECTION:
+server2.abc.com.	86400	IN	A	192.168.8.20
+server1.abc.com.	86400	IN	AAAA	2000:10::1
+
+;; Query time: 0 msec
+;; SERVER: 192.168.8.10#53(192.168.8.10)
+;; WHEN: Sat Sep 28 11:13:27 +06 2024
+;; MSG SIZE  rcvd: 190
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+07. Integrating with DHCP (Optional):
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    If applicable, integrate the DNS server with DHCP (Dynamic Host Configuration Protocol) to automatically update DNS records as devices obtain IP addresses.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+08. Monitoring and Logging:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    Set up logging (/var/log/messages, /var/log/named/named.log, etc.) to monitor DNS queries, errors, and server activity.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# vim /etc/named/named.conf.local
+zone "abc.com" IN {
+        type    master;
+        file    "/var/named/abc.com";
+        allow-query     { 127.0.0.1; 192.168.8.0/24; };
+        allow-transfer  { none; }
+};
+
+zone "8.168.192.in-addr.arpa" IN {
+        type    master;
+        file    "/var/named/abc.com.rz";
+        allow-query     { 127.0.0.1; 192.168.8.0/24; };
+        allow-transfer  { none; };
+};
+
+[root@server1 ~]# systemctl restart named
+Job for named.service failed because the control process exited with error code.
+See "systemctl status named.service" and "journalctl -xe" for details.
+
+[root@server1 ~]# tail /var/log/messages
+Sep 28 00:17:30 server1 systemd[1]: named.service: Succeeded.
+Sep 28 00:17:30 server1 systemd[1]: Stopped Berkeley Internet Name Domain (DNS).
+Sep 28 00:17:30 server1 systemd[1]: Starting Generate rndc key for BIND (DNS)...
+Sep 28 00:17:30 server1 systemd[1]: named-setup-rndc.service: Succeeded.
+Sep 28 00:17:30 server1 systemd[1]: Started Generate rndc key for BIND (DNS).
+Sep 28 00:17:30 server1 systemd[1]: Starting Berkeley Internet Name Domain (DNS)...
+Sep 28 00:17:30 server1 bash[4300]: /etc/named/named.conf.local:7: missing ';' before '}'
+Sep 28 00:17:30 server1 systemd[1]: named.service: Control process exited, code=exited status=1
+Sep 28 00:17:30 server1 systemd[1]: named.service: Failed with result 'exit-code'.
+Sep 28 00:17:30 server1 systemd[1]: Failed to start Berkeley Internet Name Domain (DNS).
+
+
+[root@server1 ~]# systemctl status named -l
+● named.service - Berkeley Internet Name Domain (DNS)
+   Loaded: loaded (/usr/lib/systemd/system/named.service; enabled; vendor preset: disabled)
+   Active: failed (Result: exit-code) since Sat 2024-09-28 00:17:30 +06; 1min 3s ago
+  Process: 4285 ExecStop=/bin/sh -c /usr/sbin/rndc stop > /dev/null 2>&1 || /bin/kill -TERM $MAINPID (code=exit>
+  Process: 4266 ExecStart=/usr/sbin/named -u named -c ${NAMEDCONF} $OPTIONS (code=exited, status=0/SUCCESS)
+  Process: 4299 ExecStartPre=/bin/bash -c if [ ! "$DISABLE_ZONE_CHECKING" == "yes" ]; then /usr/sbin/named-chec>
+ Main PID: 4267 (code=exited, status=0/SUCCESS)
+
+Sep 28 00:17:30 server1.abc.com systemd[1]: Starting Berkeley Internet Name Domain (DNS)...
+Sep 28 00:17:30 server1.abc.com bash[4300]: /etc/named/named.conf.local:7: missing ';' before '}'
+Sep 28 00:17:30 server1.abc.com systemd[1]: named.service: Control process exited, code=exited status=1
+Sep 28 00:17:30 server1.abc.com systemd[1]: named.service: Failed with result 'exit-code'.
+Sep 28 00:17:30 server1.abc.com systemd[1]: Failed to start Berkeley Internet Name Domain (DNS).
+
+[root@server1 ~]# named-checkconf /etc/named/named.conf.local
+/etc/named/named.conf.local:6: missing ';' before '}'
+
+[root@server1 ~]# vim /etc/named/named.conf.local
+zone "abc.com" IN {
+        type    master;
+        file    "/var/named/abc.com";
+        allow-query     { 127.0.0.1; 192.168.8.0/24; };
+        allow-transfer  { none; };
+};
+
+zone "8.168.192.in-addr.arpa" IN {
+        type    master;
+        file    "/var/named/abc.com.rz";
+        allow-query     { 127.0.0.1; 192.168.8.0/24; };
+        allow-transfer  { none; };
+};
+
+[root@server1 ~]# systemctl restart named
+
+[root@server1 ~]# tail /var/log/messages
+Sep 28 00:22:20 server1 systemd[1]: Started Generate rndc key for BIND (DNS).
+Sep 28 00:22:20 server1 systemd[1]: Starting Berkeley Internet Name Domain (DNS)...
+Sep 28 00:22:20 server1 bash[4371]: zone localhost.localdomain/IN: loaded serial 0
+Sep 28 00:22:20 server1 bash[4371]: zone localhost/IN: loaded serial 0
+Sep 28 00:22:20 server1 bash[4371]: zone 1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa/IN: loaded serial 0
+Sep 28 00:22:20 server1 bash[4371]: zone 1.0.0.127.in-addr.arpa/IN: loaded serial 0
+Sep 28 00:22:20 server1 bash[4371]: zone 0.in-addr.arpa/IN: loaded serial 0
+Sep 28 00:22:20 server1 bash[4371]: zone abc.com/IN: loaded serial 2024092701
+Sep 28 00:22:20 server1 bash[4371]: zone 8.168.192.in-addr.arpa/IN: loaded serial 2024092701
+Sep 28 00:22:20 server1 systemd[1]: Started Berkeley Internet Name Domain (DNS).
+
+[root@server1 ~]# systemctl status named -l
+● named.service - Berkeley Internet Name Domain (DNS)
+   Loaded: loaded (/usr/lib/systemd/system/named.service; enabled; vendor preset: disabled)
+   Active: active (running) since Sat 2024-09-28 00:22:20 +06; 12s ago
+  Process: 4285 ExecStop=/bin/sh -c /usr/sbin/rndc stop > /dev/null 2>&1 || /bin/kill -TERM $MAINPID (code=exit>
+  Process: 4373 ExecStart=/usr/sbin/named -u named -c ${NAMEDCONF} $OPTIONS (code=exited, status=0/SUCCESS)
+  Process: 4370 ExecStartPre=/bin/bash -c if [ ! "$DISABLE_ZONE_CHECKING" == "yes" ]; then /usr/sbin/named-chec>
+ Main PID: 4374 (named)
+    Tasks: 5 (limit: 24557)
+   Memory: 16.2M
+   CGroup: /system.slice/named.service
+           └─4374 /usr/sbin/named -u named -c /etc/named.conf
+
+Sep 28 00:22:20 server1.abc.com named[4374]: network unreachable resolving './DNSKEY/IN': 2001:500:2f::f#53
+Sep 28 00:22:20 server1.abc.com named[4374]: network unreachable resolving './DNSKEY/IN': 2001:500:2d::d#53
+Sep 28 00:22:20 server1.abc.com named[4374]: network unreachable resolving './DNSKEY/IN': 2001:500:a8::e#53
+Sep 28 00:22:20 server1.abc.com named[4374]: network unreachable resolving './DNSKEY/IN': 2001:500:1::53#53
+Sep 28 00:22:20 server1.abc.com named[4374]: managed-keys-zone: Key 20326 for zone . acceptance timer complete:>
+Sep 28 00:22:20 server1.abc.com named[4374]: resolver priming query complete
+Sep 28 00:22:20 server1.abc.com named[4374]: checkhints: b.root-servers.net/A (170.247.170.2) missing from hints
+Sep 28 00:22:20 server1.abc.com named[4374]: checkhints: b.root-servers.net/A (199.9.14.201) extra record in hi>
+Sep 28 00:22:20 server1.abc.com named[4374]: checkhints: b.root-servers.net/AAAA (2801:1b8:10::b) missing from >
+Sep 28 00:22:20 server1.abc.com named[4374]: checkhints: b.root-servers.net/AAAA (2001:500:200::b) extra record>
+
+----------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# vim /etc/named.conf 
+
+logging {
+        channel default_log {
+                file "/var/log/named/named.log";
+                severity dynamic;
+                print-time yes;
+        };
+
+	category default { default_log; };
+	category queries { default_log; };
+	category security { default_log; };
+};
+
+[root@server1 ~]# named-checkconf /etc/named.conf
+
+[root@server1 ~]# mkdir /var/log/named
+
+[root@server1 ~]# ls -ld /var/log/named/
+drwxr-xr-x 2 root root 6 Sep 28 13:27 /var/log/named/
+  
+[root@server1 ~]# chown named:named /var/log/named/
+[root@server1 ~]# chmod 750         /var/log/named/
+
+[root@server1 ~]# ls -ld /var/log/named/
+drwxr-x--- 2 root named 6 Sep 28 13:27 /var/log/named/
+
+[root@server1 ~]# touch /var/log/named/named.log
+
+[root@server1 ~]# chown named:named /var/log/named/named.log
+[root@server1 ~]# chmod 640         /var/log/named/named.log
+
+[root@server1 ~]# ls -l /var/log/named/named.log
+-rw-r----- 1 root named 0 Sep 28 13:32 /var/log/named/named.log
+
+[root@server1 ~]# restorecon -Rv /var/log/
+[root@server1 ~]# systemctl restart named
+
+[root@server1 ~]# nslookup server1.abc.com
+Server:		192.168.8.10
+Address:	192.168.8.10#53
+
+Name:	server1.abc.com
+Address: 192.168.8.10
+Name:	server1.abc.com
+Address: 2000:10::1
+
+[root@server1 ~]# tail  /var/log/named/named.log
+28-Sep-2024 13:46:13.556 network unreachable resolving './DNSKEY/IN': 2001:503:c27::2:30#53
+28-Sep-2024 13:46:14.458 client @0x7fd76c0eca60 8.8.8.8#44593 (.): query: . IN DNSKEY +E(0)TDCV (8.8.8.8)
+28-Sep-2024 13:46:14.459 resolver priming query complete
+28-Sep-2024 13:46:14.459 checkhints: b.root-servers.net/A (170.247.170.2) missing from hints
+28-Sep-2024 13:46:14.459 checkhints: b.root-servers.net/A (199.9.14.201) extra record in hints
+28-Sep-2024 13:46:14.459 checkhints: b.root-servers.net/AAAA (2801:1b8:10::b) missing from hints
+28-Sep-2024 13:46:14.459 checkhints: b.root-servers.net/AAAA (2001:500:200::b) extra record in hints
+28-Sep-2024 13:46:14.693 managed-keys-zone: Key 20326 for zone . acceptance timer complete: key now trusted
+28-Sep-2024 13:48:56.081 client @0x7fd76c0c0480 192.168.8.10#43472 (server1.abc.com): query: server1.abc.com IN A + (192.168.8.10)
+28-Sep-2024 13:48:56.081 client @0x7fd76c0c0480 192.168.8.10#46243 (server1.abc.com): query: server1.abc.com IN AAAA + (192.168.8.10)
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+Configure monitoring tools like Nagios or Zabbix to receive alerts and notifications about DNS server performance and health.
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# getenforce 
+enforcing
+
+[root@server1 ~]# sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config 
+[root@server1 ~]# reboot 
+
+[root@server1 ~]# getenforce 
+Disabled
+
+[root@server1 ~]# yum install httpd php php-cli gcc glibc glibc-common gd gd-devel net-snmp openssl-devel wget unzip -y
+
+[root@server1 ~]# useradd  nagios
+[root@server1 ~]# groupadd nagcmd
+
+[root@server1 ~]# usermod -aG nagcmd nagios
+[root@server1 ~]# usermod -aG nagcmd apache
+
+[root@server1 ~]# cd /tmp
+
+[root@server1 tmp]# wget https://assets.nagios.com/downloads/nagioscore/releases/nagios-4.1.1.tar.gz
+
+[root@server1 tmp]# wget http://www.nagios-plugins.org/download/nagios-plugins-2.1.1.tar.gz
+
+[root@server1 tmp]# tar -xf nagios-4.1.1.tar.gz
+[root@server1 tmp]# tar -xf nagios-plugins-2.1.1.tar.gz
+
+[root@server1 tmp]# cd nagios-4.1.1
+
+[root@server1 nagios-4.1.1]# ./configure --with-command-group=nagcmd
+
+[root@server1 nagios-4.1.1]# make all
+bash: make: command not found...
+Install package 'make' to provide command 'make'? [N/y] y
+
+
+ * Waiting in queue... 
+ * Loading list of packages.... 
+The following packages have to be installed:
+ make-1:4.2.1-11.el8.x86_64	A GNU tool which simplifies the build process for users
+Proceed with changes? [N/y] y
+
+[root@server1 nagios-4.1.1]# make install
+
+[root@server2 nagios-4.1.1]# make install-init
+/usr/bin/install -c -m 755 -d -o root -g root /etc/rc.d/init.d
+/usr/bin/install -c -m 755 -o root -g root daemon-init /etc/rc.d/init.d/nagios
+
+*** Init script installed ***
+
+
+[root@server1 nagios-4.1.1]# make install-commandmode
+/usr/bin/install -c -m 775 -o nagios -g nagcmd -d /usr/local/nagios/var/rw
+chmod g+s /usr/local/nagios/var/rw
+
+*** External command directory configured ***
+
+[root@server1 nagios-4.1.1]# make install-config
+
+[root@server1 nagios-4.1.1]# make install-webconf
+/usr/bin/install -c -m 644 sample-config/httpd.conf /etc/httpd/conf.d/nagios.conf
+
+*** Nagios/Apache conf file installed ***
+
+
+[root@server1 nagios-4.1.1]# htpasswd -c /usr/local/nagios/etc/htpasswd.users nagiosadmin
+New password: Asdf1234
+Re-type new password: Asdf1234
+Adding password for user nagiosadmin
+
+
+[root@server1 nagios-4.1.1]# cd /tmp/nagios-plugins-2.1.1
+
+[root@server1 nagios-plugins-2.1.1]# ./configure --with-nagios-user-nagios --with-nagios-group-nagios --with-openssl
+
+[root@server1 nagios-plugins-2.1.1]# make all
+[root@server1 nagios-plugins-2.1.1]# make install
+
+[root@server1 nagios-plugins-2.1.1]#cd
+
+[root@server1 ~]# systemctl enable httpd --now
+
+[root@server1 ~]# systemctl status httpd
+● httpd.service - The Apache HTTP Server
+   Loaded: loaded (/usr/lib/systemd/system/httpd.service; enabled; vendor preset: disabled)
+  Drop-In: /usr/lib/systemd/system/httpd.service.d
+           └─php-fpm.conf
+   Active: active (running) since Fri 2024-09-27 19:05:48 +06; 38s ago
+
+[root@server1 ~]# systemctl start  nagios
+[root@server1 ~]# systemctl enable nagios
+nagios.service is not a native service, redirecting to systemd-sysv-install.
+Executing: /usr/lib/systemd/systemd-sysv-install enable nagios
+
+[root@server1 ~]# systemctl status nagios
+● nagios.service - LSB: Starts and stops the Nagios monitoring server
+   Loaded: loaded (/etc/rc.d/init.d/nagios; generated)
+   Active: active (running) since Fri 2024-09-27 19:06:53 +06; 8s ago
+
+[root@server1 ~]# firewall-cmd --permanent --add-service=http 
+[root@server1 ~]# firewall-cmd --reload
+
+[root@server1 ~]# firewall-cmd --list-services 
+cockpit dhcpv6-client dns ftp http ssh
+
+[root@server1 ~]# getenforce 
+Disabled
+
+[root@server1 ~]# sed -i 's/SELINUX=disabled/SELINUX=enforcing/g' /etc/selinux/config 
+[root@server1 ~]# reboot 
+
+[root@server1 ~]# getenforce 
+enforcing
+
+[root@server1 ~]# firefox http://192.168.8.10/nagios/
+Username: nagiosadmin
+Password: Asdf1234
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+09. Backup and Disaster Recovery:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    Implement a backup strategy to regularly back up BIND configuration files (named.conf, zone files) and DNS databases (/var/named/) to ensure quick 
+recovery in case of server failures or data loss.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# vim DnsBackup.sh 
+#!/bin/bash
+DATE=$(date +%F)
+
+BACKUP_DIR="/root/bind-backups"
+
+# Create backup directory if it doesn't exist
+mkdir -pv $BACKUP_DIR
+
+# Stop named service
+systemctl stop named
+
+# Backup configurations and zone files
+tar -czvf $BACKUP_DIR/bind-config-backup-$DATE.tar.gz      /etc/named*
+tar -czvf $BACKUP_DIR/bind-zone-backup-$DATE.tar.gz        /var/named
+
+# Start named service
+systemctl start named
+
+# Print message
+echo "BIND DNS backup completed on $DATE"
+
+[root@server1 ~]# sh DnsBackup.sh 
+
+[root@server1 ~]# ls -l  /root/bind-backups/
+-rw-r--r--. 1 root root  2220 Sep 27 18:31 bind-config-backup-2024-09-27.tar.gz
+-rw-r--r--. 1 root root  5259 Sep 27 18:31 bind-dnssec-keys-backup-2024-09-27.tar.gz
+-rw-r--r--. 1 root root 47991 Sep 27 18:31 bind-zone-backup-2024-09-27.tar.gz
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+[root@server1 ~]# crontab -e
+30 2 * * * /bin/sh   /root/DnsBackup.sh
+
+[root@server1 ~]# systemctl restart crond
+
+[root@server1 ~]# crontab -l
+30 2 * * * /bin/sh   /root/DnsBackup.sh
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+10. Documentation and Maintenance:
+---------------------------------------------------------------------------------------------------------------------------------------------------------
+
+    Document the DNS server setup, configuration steps, and any customizations made for future reference and troubleshooting.
+    Schedule regular maintenance tasks such as applying updates and patches to BIND and RHEL to protect against security vulnerabilities
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,0 +1,52 @@
+#!/bin/bash
+# DHCP Server Setup Script
+
+# Variables
+INTERFACE="eth0" # Change to the correct network interface
+SUBNET="192.168.8.0"
+NETMASK="255.255.255.0"
+RANGE_START="192.168.8.100"
+RANGE_END="192.168.8.200"
+GATEWAY="192.168.8.2"
+DNS_SERVER="192.168.8.10"
+LEASE_TIME="600"
+MAX_LEASE_TIME="7200"
+
+# Install DHCP server
+echo "Installing DHCP server..."
+yum install -y dhcp-server
+
+# Configure dhcpd.conf
+echo "Configuring DHCP server..."
+cat > /etc/dhcp/dhcpd.conf <<EOL
+default-lease-time $LEASE_TIME;
+max-lease-time $MAX_LEASE_TIME;
+subnet $SUBNET netmask $NETMASK {
+    range $RANGE_START $RANGE_END;
+    option routers $GATEWAY;
+    option domain-name-servers $DNS_SERVER;
+}
+EOL
+
+# Enable and start the DHCP service
+echo "Enabling and starting DHCP service..."
+systemctl start dhcpd
+systemctl enable dhcpd
+
+# Assign DHCP service to the correct interface
+echo "Configuring DHCP to listen on interface $INTERFACE..."
+sed -i "s/^DHCPDARGS=.*/DHCPDARGS=\"$INTERFACE\"/" /etc/sysconfig/dhcpd
+
+# Restart the DHCP service
+systemctl restart dhcpd
+
+# Firewall rules (if needed)
+echo "Updating firewall rules..."
+firewall-cmd --permanent --add-service=dhcp
+firewall-cmd --reload
+
+# Validation
+echo "Checking DHCP service status..."
+systemctl status dhcpd
+
+echo "DHCP server setup completed successfully."
